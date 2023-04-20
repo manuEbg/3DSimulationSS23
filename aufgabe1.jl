@@ -1,3 +1,4 @@
+using Printf
 ## Helpers
 
 literPerMin_to_cm3PerS(x) = (x * 1000.0) / 60.0
@@ -25,7 +26,7 @@ mutable struct Container
 
         ## Calculate the Area of the outputs
 
-        # 5.32 mm^2 ist die flaeche der loecher
+        # The area of the outputHoles is 5.32 mm^2 
         targetSpeed = literPerMin_to_m3PerS(1.0)
         waterColumn = 0.5 # m
         outputArea = targetSpeed / sqrt(waterColumn * g * 2) # m
@@ -73,40 +74,48 @@ function getOutputSpeed(c::Container)
 end
 
 ## Simulation
-function simulate(c::Container, ϕ_in::Float64, timestep::Float64)
-    time = 0
-    while true
-        
-        increaseWaterLevel!(c, ϕ_in, timestep)
+function printSimulation(name,t,l,ϕ_out,ϕ_in)
+    println(name, ":")
+    @printf "t:\t%.3f\t" t
+    @printf "level:\t%.3E\t" l
+    @printf "Out:\t%.3E\t" ϕ_out
+    @printf "In:\t%.3E\n" ϕ_in 
+end
 
-        if(c.waterLevel >= 0.9) 
-            break; 
-        end
+function simulate(c::Container, ϕ_in::Float64, timestepSize::Float64, breakPrecision::Float64)
+    timestep = 0
+    tInSec = 0.0
+    ϕ_out = 0.0
+    c.waterLevel = 0.0
+    
+    while true
+        tInSec = timestep * timestepSize
+        increaseWaterLevel!(c, ϕ_in, timestepSize)
+        
         ϕ_out = getOutputSpeed(c)
         
-        decreaseWaterLevel!(c, ϕ_out, timestep)
-
-        time = time + 1;
-        if(time % 30000 == 0) 
-            level = c.waterLevel
-            t = time * timestep
-            @show t level
+        if( abs(ϕ_in - ϕ_out) < breakPrecision) 
+            break; 
         end
         
+        decreaseWaterLevel!(c, ϕ_out, timestepSize)
+        
+        if(timestep % 30000 == 0) 
+            printSimulation(string(timestep),tInSec,c.waterLevel,ϕ_out,ϕ_in)
+        end
+
+        timestep = timestep + 1;
     end
 
-
-    c.waterLevel = 0
-
-    @show time * timestep
+    printSimulation("Equilibrium",tInSec,c.waterLevel,ϕ_out,ϕ_in)
 end
 
 
 
 ## Configuration
 ϕ_in = literPerMin_to_m3PerS(10)
-#ϕ_out = literPerMin_to_m3PerS(1)
 c = Container(0.1,0.1,1.0,0.1)
-timestep = 0.001;
-simulate(c, ϕ_in, timestep)
 
+# ! NOTE: Higher BreakPrecision drasticly increases the time needed to reach equilibrium
+# * However the stepSizePrecision has little effect on the result
+simulate(c, ϕ_in, 0.0001, 1e-13)
