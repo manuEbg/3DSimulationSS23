@@ -46,6 +46,7 @@ mutable struct Container
     end
 end
 
+
 function nActiveOutputs(c::Container)
     floor(Int, c.waterLevel / c.outputDistance) + 1
 end

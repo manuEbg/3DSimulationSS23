@@ -36,7 +36,7 @@ function simulation()
     #τ = 0.01 # ?
     h = length / grid_size[1]
     h2 = h * h
-    τ = h2/ (2 * α)
+    τ = h2 / (2 * α)
 
     ##
 
@@ -47,11 +47,12 @@ function simulation()
     m = bandMatrix(grid_size[1])
 
     
-    while stick[measure_danger[1]] < temp_danger
+    #while stick[measure_danger[1]] < temp_danger
         stick .= simulationRound(stick, m, τ, h2,  α)
         (t % 20000 == 0) && print(t,τ, stick[measure_danger[1]])
+
         t += 1
-    end
+    #end
 
     println(secondsToTime(t * τ))
 end
