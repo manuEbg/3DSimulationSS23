@@ -1,14 +1,19 @@
 using Printf
 
-B_GregBias(Y::Int; isGreg=true) = !isGreg ? 0 : (2 - (Y÷100) + (Y÷400))
+B_GregBias(Y::Int) = (2 - (Y÷100) + (Y÷400))
 monthconvert(Y::Int, M::Int) = M > 2 ? (Y,M) : (Y-1, M+12)
 C_J = 36525
 Δ_JD0 = 2451545
 C_T = 1.002738
 C_T0 = 2400.05134
 C_Θ = 6.697376
-JulianDate(Y::Int,M::Int,D::Int; isGreg=true) = floor((C_J/100)*(Y + 4716)) + floor(30.6001(M+1)) + D + B_GregBias(Y, isGreg=isGreg) - 1524.5
-
+function JulianDate(Y::Int, M::Int, D::Int; isGreg=true) 
+    (y,m) = monthconvert(Y,M)
+    bias = isGreg ? B_GregBias(y) : 0
+    century = floor((C_J/100)*(y + 4716))
+    mon = floor(30.6001(m+1))
+    century + mon + D + bias  - 1524.5
+end
 function SunProjection(N)
     Ε = 23.439 - 0.4e-6 * N |> deg2rad
     g = 357.528 + 0.9856003 * N |> deg2rad
@@ -26,44 +31,57 @@ function SunProjection(N)
 end
 
 
+
+
 # δ Deklination der Sonne
 # ϕ Geografische Breite Zielort
 # τ Winkeldistanz Zielort Sonne
+sunPosition(δ, ϕ, τ) = (azimuth(δ,ϕ,τ), elevation(δ,ϕ,τ))
 azimuth(δ, ϕ, τ) = atan(sin(τ)/ (cos(τ) * sin(ϕ) - tan(δ) * cos(ϕ)))
 elevation(δ, ϕ ,τ) = asin(cos(δ) * cos(τ) * cos(ϕ) + sin(δ) * sin(ϕ))
 
-
-
-function calc(Y::Int, M::Int, D::Int, T::Float64) 
-    long = 11.6 # Geographische laenge
-    lat = deg2rad(48.1) # Geografische Breite
-    δ = 0.0  # TODO Deklination der Sonne; 
-    α = 0.0 # TODO Right Ascention ?= Rektatention
-
-    (Y,M) = monthconvert(Y,M)
-    jd0 = JulianDate(Y,M,D)
-    @show jd0 
+# longitude of the destination in radiants
+function calc_n_and_Θ(jd0, longitude, T)
     temp = (jd0 - Δ_JD0)
     n = temp + T 
     t0 = temp / C_J
-    @show t0 typeof(t0)
-    #t0 = 0.06594113621
     Θ_hG = C_Θ + C_T0 * t0 + C_T * T * 24.0
     Θ_hG  %= 24
-    @show Θ_hG
-    Θ_G = Θ_hG * 15
-    Θ = Θ_G + long
-    @show Θ
+    Θ_G = Θ_hG * 15 |> deg2rad
     
-    
-    (α, δ) = SunProjection(n)
-    #(α, δ)
-    τ = deg2rad(Θ) - α 
-    #(τ, δ)
+    (n, Θ_G + longitude)
+end
 
-    (α, δ, azimuth(δ,lat,τ), elevation(δ,lat,τ))
+function calc(Y::Int, M::Int, D::Int, T::Float64) 
+    long = 11.6 |> deg2rad # Geographische laenge
+    lat = 48.1 |> deg2rad # Geografische Breite
+
+    jd0 = JulianDate(Y,M,D)
+    
+    (n, Θ) = calc_n_and_Θ(jd0, long, T)
+
+    (α, δ) = SunProjection(n)
+
+    τ = Θ - α 
+    #@show Θ |> rad2deg
+
+    (a,h) = sunPosition(δ,lat,τ)
+    #@show h |> rad2deg
+    h = refractionCorrection(h)
+    (a, h)
+end
+
+# elevation as radiants
+function refractionCorrection(elevation::Float64)
+    h = elevation |> rad2deg
+    R = 1.02 / tand(h + 10.3/(h + 5.11))
+    (h + R/60) |> deg2rad
 end
 
 
-@printf "Rektaszension: %.4f, Deklination: %.4f\nazimuth: %.2f, elevation: %.2f\n" (calc(2006,8,6,0.25) .|> rad2deg)...
-# @printf "azimuth: %.2f, elevation: %.2f\n" calc(2023,6,28,0.5)...
+for i in 0:47 
+    t = i / 48
+    @printf "time %.2f azimuth: %.4f, elevation: %.4f\n" t * 24 (calc(2006,8,6,t) .|> rad2deg)...
+end
+
+# Rektaszension: %.4f, Deklination: %.4f\n
