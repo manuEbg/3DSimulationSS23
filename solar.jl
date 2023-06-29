@@ -1,4 +1,5 @@
 using Printf
+using Plots
 
 B_GregBias(Y::Int) = (2 - (Y÷100) + (Y÷400))
 monthconvert(Y::Int, M::Int) = M > 2 ? (Y,M) : (Y-1, M+12)
@@ -77,11 +78,18 @@ function refractionCorrection(elevation::Float64)
     R = 1.02 / tand(h + 10.3/(h + 5.11))
     (h + R/60) |> deg2rad
 end
+range = 0:0.05:800.0
+result = [calc(2006,8,6,t/24.0) .|> rad2deg for t in range]
 
-
-for i in 0:47 
-    t = i / 48
-    @printf "time %.2f azimuth: %.4f, elevation: %.4f\n" t * 24 (calc(2006,8,6,t) .|> rad2deg)...
+function printRes(result)
+    for r in result
+        @printf "azimuth: %.4f, elevation: %.4f\n" r...
+    end
 end
 
+
+data = (vec([r[2] for r in result]), vec([r[1] for r in result])) |> a -> hcat(a...)
+
+    
+plot(range, data[:,1])
 # Rektaszension: %.4f, Deklination: %.4f\n
