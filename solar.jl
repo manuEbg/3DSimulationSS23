@@ -1,5 +1,6 @@
 using Plots
 using Printf
+using LinearAlgebra
 # https://static.trinasolar.com/sites/default/files/DE_Datasheet_VertexS_DE09.08_2021_A.pdf
 B_GregBias(Y::Int) = (2 - (Y ÷ 100) + (Y ÷ 400))
 monthconvert(Y::Int, M::Int) = M > 2 ? (Y, M) : (Y - 1, M + 12)
@@ -66,6 +67,12 @@ Base.:-(a::AnglePosition, b::AnglePosition) = AnglePosition(
   a.elevation - b.elevation 
 )
 
+function to_cartesian(pos::AnglePosition)
+  ϕ = (pos.azimuth + (180 |> deg)).rad
+  Θ = (π/2) - pos.elevation.rad
+  [sin(Θ) * cos(ϕ), sin(Θ) * sin(ϕ), cos(Θ)]
+end
+
 struct SunProjection
   α::Angle # Rektaszension
   δ::Angle # Deklination
@@ -119,14 +126,16 @@ function calc(date::Date, panel::SolarPanel)
   
   sun = sun_angles(date, l, refraction_correction = refractionCorrection)
   delta = panel.position - sun
-  e = (sun.elevation.deg > 0) ? energy_factor(delta) * 100 : 0
-
+  #e = (sun.elevation.deg > 0) ? energy_factor(delta) * 100 : 0
+  e =  ef(sun, panel.position) * 100 
+  e = ( sun.elevation.deg >= 0 ) * e
+  e = ( e >= 0 ) * e
   (sun, e, delta)
 end
 
 
-energy_factor(delta::AnglePosition) = (1 - sin(delta.elevation.rad) * sin(delta.azimuth.rad))
-
+energy_factor(delta::AnglePosition) = 1 - sin( delta.elevation.rad) #  cos(delta.azimuth.rad * (delta.azimuth.rad)))
+ef(s:: AnglePosition, p:: AnglePosition) = dot(to_cartesian(s), to_cartesian(p))
 # elevation as radiants
 """
     refractionCorrection(elevation::Float64)::Float64
@@ -141,10 +150,10 @@ function refractionCorrection(elevation::Angle)::Angle
 end
 range = 0:0.02:72.0
 
-#l = GeoLocation(11.6 |> deg, 48.1 |> deg)
-l = GeoLocation(0 |> deg, 0|> deg)
-panel = SolarPanel(l,AnglePosition(deg(90),deg(90)),PanelSize(1,1))
-data = [calc(Date(2023,12,21,t/24.0), panel) for t in range]
+l = GeoLocation(11.6 |> deg, 48.1 |> deg)
+#l = GeoLocation(0 |> deg, 0|> deg)
+panel = SolarPanel(l,AnglePosition(deg(-90),deg(10)),PanelSize(1,1))
+data = [calc(Date(2023,6,21,t/24.0), panel) for t in range]
 plotting_data = hcat(
   map(sun -> sun[1].azimuth.deg , data),
   map(sun -> sun[1].elevation.deg, data),
