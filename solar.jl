@@ -19,11 +19,8 @@ rad(value) = Angle(value, value |> rad2deg)
 Base.:+(a::Angle,b::Angle) = rad(a.rad + b.rad)
 Base.:-(a::Angle,b::Angle) = rad(a.rad - b.rad)
 struct Date
-  Y::Int
-  M::Int
-  D::Int
-  T::Float64
-  T_H::Float64
+  T::Float64 # Fraction of Day 0.0..1.0
+  T_H::Float64 # Fraction of Day 0.0..24.0
   MJD::Float64
   MJD0::Float64
   """
@@ -31,22 +28,29 @@ struct Date
     Note: 0.0 => 00:00, 0.5 => 12:00, 1.0 => 00:00 on the next day
   """
   function Date(y::Int, m::Int, d::Int, t::Float64) 
-    jd0 = JulianDate(y,m,d)
+    jd0 = juliandate(y,m,d)
     mjd0 = jd0 - Δ_JD0
     mjd = mjd0 + t # n
 
-    new(y,m,d,t,t*24.0,mjd,mjd0)
+    new(t,t*24.0,mjd,mjd0)
   end
 
-  function JulianDate(Y::Int, M::Int, D::Int; isGreg=true)
-    (y, m) = monthconvert(Y, M)
-    bias = isGreg ? B_GregBias(y) : 0
-    century = floor((C_J / 100) * (y + 4716))
-    mon = floor(30.6001(m + 1))
-    century + mon + D + bias - 1524.5
-  end
+  Date(date::Date, Δt::Number) = new(date.T + Δt, date.T_H + Δt * 24, date.MJD + Δt, date.MJD0)
 
+  """
+    JulianDate(Y::Integer, M::Integer, D::Integer; isGreg=true)
+    Returns the JulianDate on the given day at UT 00:00
+  """
+  function juliandate(Y::Integer, M::Integer, D::Integer; isGreg=true)::Float64
+      (y, m) = monthconvert(Y, M)
+      bias = isGreg ? B_GregBias(y) : 0
+      century = floor((C_J / 100) * (y + 4716))
+      mon = floor(30.6001(m + 1))
+      century + mon + D + bias - 1524.5
+  end
 end
+
+Base.:+(a::Date, b::Number) = Date(a, b)
 
 struct GeoLocation 
   longitude::Angle
@@ -58,34 +62,44 @@ struct PanelSize
   height::Float64
 end
 
-struct AnglePosition
+struct SphericalCoordinates
   azimuth::Angle
   elevation::Angle
+  SphericalCoordinates() = new(0 |> deg, 0 |> deg)
+  SphericalCoordinates(azimuth, elevation) = new(azimuth,elevation)
 end
-Base.:-(a::AnglePosition, b::AnglePosition) = AnglePosition(
+
+Base.:-(a::SphericalCoordinates, b::SphericalCoordinates) = SphericalCoordinates(
   a.azimuth - b.azimuth, 
   a.elevation - b.elevation 
 )
 
-function to_cartesian(pos::AnglePosition)
+function to_cartesian(pos::SphericalCoordinates)
   ϕ = (pos.azimuth + (180 |> deg)).rad
   Θ = (π/2) - pos.elevation.rad
   [sin(Θ) * cos(ϕ), sin(Θ) * sin(ϕ), cos(Θ)]
 end
 
+"""
+  SunProjection 
+  α - Right Ascension ( The angle of the sun projected onto the equatorial plane. 
+      Measured in counter clockwise direction from the vernal equinox )
+  δ - Declination ( The Latitude of the projection of the sun )
+"""
 struct SunProjection
-  α::Angle # Rektaszension
-  δ::Angle # Deklination
+  α::Angle 
+  δ::Angle 
+  
   function SunProjection(N)
     Ε = 23.439 - 0.4e-6 * N |> deg2rad # angle between earth rotation axis and eclipsis
     g = 357.528 + 0.9856003 * N |> deg2rad
     L = 280.460 + 0.985647 * N # degree
     Λ = L + 1.915 * sin(g) + 0.01997 * sin(2 * g) |> deg2rad
-    α = atan(cos(Ε) * tan(Λ)) # Rektaszension
+    α = atan(cos(Ε) * tan(Λ)) # Right Ascension
   
     α = cos(Λ) <= 0 ? α + 4 * atan(1) : α
   
-    δ = asin(sin(Λ) * sin(Ε)) # Deklination
+    δ = asin(sin(Λ) * sin(Ε)) # Declination
   
     new(α |> rad, δ |> rad)
   end
@@ -100,17 +114,18 @@ All values as radiants
 azimuth(δ, ϕ, τ) = atan(sin(τ) , cos(τ) * sin(ϕ) - tan(δ) * cos(ϕ))
 elevation(δ, ϕ, τ) = asin(cos(δ) * cos(τ) * cos(ϕ) + sin(δ) * sin(ϕ))
 
-function sun_angles(date::Date, location::GeoLocation; refraction_correction::Function = identity)::AnglePosition
+function sun_spherical(date::Date, location::GeoLocation; refraction_correction::Function = identity)::SphericalCoordinates
   sun = SunProjection(date.MJD)
   τ = Θ(date,location) - sun.α
-  AnglePosition(
+  SphericalCoordinates(
     azimuth(sun.δ.rad, location.latitude.rad, τ.rad) |> rad,
     elevation(sun.δ.rad, location.latitude.rad, τ.rad) |> rad |> refraction_correction
   )
 end
+
 struct SolarPanel
   location::GeoLocation
-  position::AnglePosition
+  position::SphericalCoordinates
   size::PanelSize
 end  
 
@@ -122,20 +137,11 @@ function Θ(date::Date, location::GeoLocation)::Angle
   Θ_G + location.longitude
 end
 
-function calc(date::Date, panel::SolarPanel)
-  
-  sun = sun_angles(date, l, refraction_correction = refractionCorrection)
-  delta = panel.position - sun
-  #e = (sun.elevation.deg > 0) ? energy_factor(delta) * 100 : 0
-  e =  ef(sun, panel.position) * 100 
-  e = ( sun.elevation.deg >= 0 ) * e
-  e = ( e >= 0 ) * e
-  (sun, e, delta)
+function power_factor(sun:: SphericalCoordinates, panel:: SphericalCoordinates)::Float64 
+  f = dot(to_cartesian(sun), to_cartesian(panel))
+  f = (sun.elevation.deg > 0 && f >= 0) * f
+  f
 end
-
-
-energy_factor(delta::AnglePosition) = 1 - sin( delta.elevation.rad) #  cos(delta.azimuth.rad * (delta.azimuth.rad)))
-ef(s:: AnglePosition, p:: AnglePosition) = dot(to_cartesian(s), to_cartesian(p))
 # elevation as radiants
 """
     refractionCorrection(elevation::Float64)::Float64
@@ -148,29 +154,63 @@ function refractionCorrection(elevation::Angle)::Angle
   R = 1.02 / tand(h + 10.3 / (h + 5.11))
   deg(h + R / 60)
 end
-range = 0:0.02:72.0
+range = 0:0.02:24.0
 
 l = GeoLocation(11.6 |> deg, 48.1 |> deg)
 #l = GeoLocation(0 |> deg, 0|> deg)
-panel = SolarPanel(l,AnglePosition(deg(-90),deg(10)),PanelSize(1,1))
-data = [calc(Date(2023,6,21,t/24.0), panel) for t in range]
-plotting_data = hcat(
-  map(sun -> sun[1].azimuth.deg , data),
-  map(sun -> sun[1].elevation.deg, data),
-  map(e -> e[2], data), 
-  #map(delta -> delta[3].azimuth.deg, data),
-  #map(delta -> delta[3].elevation.deg, data)
-)
+panel = SolarPanel(l,SphericalCoordinates(deg(57.34),deg(90)),PanelSize(1,1))
 
-function printRes(result)
-  for r in result
-    @printf "azimuth: %.4f, elevation: %.4f\n" r.azimuth.deg r.elevation.deg
+struct Simulation
+  solarpanel::SolarPanel
+  startdate::Date
+  enddate::Date
+  timestep::Float64 # timestep in days
+end
+
+struct SimulationState
+  t::Date # Current simulation time
+  #sun_eq::SunProjection # 
+  sun_sph::SphericalCoordinates
+  sun_power::Float64
+  panel_power::Float64
+  power_consumption::Float64
+  storage_energy::Float64
+  SimulationState(date::Date) = new(date, SphericalCoordinates(), 0,0,0,0)
+  SimulationState(t,sun_sph,sun_power,panel_power,power_consumption,storage_energy) = new(
+    t,sun_sph,sun_power,panel_power,power_consumption,storage_energy
+  )
+end
+
+function (sim::Simulation)(state::SimulationState)::SimulationState
+    date = state.t + sim.timestep
+    sun = sun_spherical(
+      date, 
+      sim.solarpanel.location, 
+      refraction_correction = refractionCorrection
+    )
+
+    -0.1 < sun.elevation.deg < 0.1 && @show date.T_H 
+
+    sun_p = 1000
+    panel_p = power_factor(sun, panel.position) * 405 # Watt
+
+    e = state.storage_energy + panel_p * sim.timestep # Watt/Day ?
+    consumption = state.power_consumption * sim.timestep
+    e = e - consumption
+
+    SimulationState(date,sun,sun_p,panel_p, consumption, e)
+end
+
+function (sim::Simulation)()
+  state = SimulationState(sim.startdate)
+  while(state.t.MJD < sim.enddate.MJD)
+    state = sim(state)
   end
 end
 
-# printRes(data)
-
-pl = plot(range, plotting_data,lab=["SunAz" "SunH" "Energy" "ΔAz" "ΔH"], legend = :outerright)
+simulation = Simulation(panel,Date(2023,6,21,0.0),Date(2023,6,22,0.0), 0.0001)
+simulation()
+pl = plot(range, plotting_data,lab=["SunAz" "SunH" "Power" "Energy" "ΔAz" "ΔH"], legend = :outerright)
 Plots.pdf(pl, "testr.pdf")
 
 
