@@ -61,6 +61,10 @@ struct AnglePosition
   azimuth::Angle
   elevation::Angle
 end
+Base.:-(a::AnglePosition, b::AnglePosition) = AnglePosition(
+  a.azimuth - b.azimuth, 
+  a.elevation - b.elevation 
+)
 
 struct SunProjection
   α::Angle # Rektaszension
@@ -81,7 +85,7 @@ struct SunProjection
 end
 
 """
-All valuse as radiants
+All values as radiants
 -  δ Deklination der Sonne
 -  ϕ Geografische Breite Zielort
 -  τ Winkeldistanz Zielort Sonne
@@ -94,7 +98,7 @@ function sun_angles(date::Date, location::GeoLocation; refraction_correction::Fu
   τ = Θ(date,location) - sun.α
   AnglePosition(
     azimuth(sun.δ.rad, location.latitude.rad, τ.rad) |> rad,
-    elevation(sun.δ.rad, location.latitude.rad, τ.rad) |> refraction_correction |> rad
+    elevation(sun.δ.rad, location.latitude.rad, τ.rad) |> rad |> refraction_correction
   )
 end
 struct SolarPanel
@@ -111,13 +115,17 @@ function Θ(date::Date, location::GeoLocation)::Angle
   Θ_G + location.longitude
 end
 
-function calc(date::Date)
-  l = GeoLocation(11.6 |> deg, 48.1 |> deg)
+function calc(date::Date, panel::SolarPanel)
   
-  sun = sun_angles(date, l, refraction_correction = identity)
-  # h = refractionCorrection(h)
-  sun
+  sun = sun_angles(date, l, refraction_correction = refractionCorrection)
+  delta = panel.position - sun
+  e = (sun.elevation.deg > 0) ? energy_factor(delta) * 100 : 0
+
+  (sun, e, delta)
 end
+
+
+energy_factor(delta::AnglePosition) = (1 - sin(delta.elevation.rad) * sin(delta.azimuth.rad))
 
 # elevation as radiants
 """
@@ -126,17 +134,23 @@ end
     - returns corrected elevation in degree
     due to the refraction of the atmosphere the suns elevation needs to be adjusted.
 """
-function refractionCorrection(elevation::Float64)::Float64
-  h = elevation
+function refractionCorrection(elevation::Angle)::Angle
+  h = elevation.deg
   R = 1.02 / tand(h + 10.3 / (h + 5.11))
-  (h + R / 60)
+  deg(h + R / 60)
 end
-range = 0:0.05:72.0
+range = 0:0.02:72.0
 
-data = [calc(Date(2023,9,21,t/24.0)) for t in range]
+#l = GeoLocation(11.6 |> deg, 48.1 |> deg)
+l = GeoLocation(0 |> deg, 0|> deg)
+panel = SolarPanel(l,AnglePosition(deg(90),deg(90)),PanelSize(1,1))
+data = [calc(Date(2023,12,21,t/24.0), panel) for t in range]
 plotting_data = hcat(
-  map(sun -> sun.azimuth.deg , data),
-  map(sun -> sun.elevation.deg, data) 
+  map(sun -> sun[1].azimuth.deg , data),
+  map(sun -> sun[1].elevation.deg, data),
+  map(e -> e[2], data), 
+  #map(delta -> delta[3].azimuth.deg, data),
+  #map(delta -> delta[3].elevation.deg, data)
 )
 
 function printRes(result)
@@ -147,5 +161,8 @@ end
 
 # printRes(data)
 
-pl = plot(range, plotting_data)
-Plots.pdf(pl, "test.pdf")
+pl = plot(range, plotting_data,lab=["SunAz" "SunH" "Energy" "ΔAz" "ΔH"], legend = :outerright)
+Plots.pdf(pl, "testr.pdf")
+
+
+
