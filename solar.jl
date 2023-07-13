@@ -18,6 +18,8 @@ deg(value) = Angle(value |> deg2rad, value)
 rad(value) = Angle(value, value |> rad2deg)
 Base.:+(a::Angle,b::Angle) = rad(a.rad + b.rad)
 Base.:-(a::Angle,b::Angle) = rad(a.rad - b.rad)
+
+# TODO support something other than UT (Universal Time)
 struct Date
   T::Float64 # Fraction of Day 0.0..1.0
   T_H::Float64 # Fraction of Day 0.0..24.0
@@ -35,6 +37,15 @@ struct Date
     new(t,t*24.0,mjd,mjd0)
   end
 
+  function Date(y::Int, m::Int, d::Int)
+    new(y,m,d,0.0)
+  end
+
+  """
+    Date(date::Date, Δt::Number)
+
+    constructs a new date from the given date and adds Δt (a value of 1.0 results in the next day)
+  """
   Date(date::Date, Δt::Number) = new(date.T + Δt, date.T_H + Δt * 24, date.MJD + Δt, date.MJD0)
 
   """
@@ -142,10 +153,10 @@ function power_factor(sun:: SphericalCoordinates, panel:: SphericalCoordinates):
   f = (sun.elevation.deg > 0 && f >= 0) * f
   f
 end
-# elevation as radiants
+
 """
-    refractionCorrection(elevation::Float64)::Float64
-    - elevation in degree
+    refractionCorrection(elevation::Angle)::Angle
+    - elevation of the sun
     - returns corrected elevation in degree
     due to the refraction of the atmosphere the suns elevation needs to be adjusted.
 """
@@ -154,11 +165,6 @@ function refractionCorrection(elevation::Angle)::Angle
   R = 1.02 / tand(h + 10.3 / (h + 5.11))
   deg(h + R / 60)
 end
-range = 0:0.02:24.0
-
-l = GeoLocation(11.6 |> deg, 48.1 |> deg)
-#l = GeoLocation(0 |> deg, 0|> deg)
-panel = SolarPanel(l,SphericalCoordinates(deg(57.34),deg(90)),PanelSize(1,1))
 
 struct Simulation
   solarpanel::SolarPanel
@@ -181,6 +187,12 @@ struct SimulationState
   )
 end
 
+
+"""
+    (sim::Simulation)(state::SimulationState)::SimulationState
+
+One step forward in the simulation
+"""
 function (sim::Simulation)(state::SimulationState)::SimulationState
     date = state.t + sim.timestep
     sun = sun_spherical(
@@ -189,29 +201,73 @@ function (sim::Simulation)(state::SimulationState)::SimulationState
       refraction_correction = refractionCorrection
     )
 
+    # sunrise and sunset
     -0.1 < sun.elevation.deg < 0.1 && @show date.T_H 
 
-    sun_p = 1000
-    panel_p = power_factor(sun, panel.position) * 405 # Watt
+    sun_p = 1000 # Watts per Square Meter
+    panel_p = power_factor(sun, panel.position) * 205 # Watts
 
-    e = state.storage_energy + panel_p * sim.timestep # Watt/Day ?
+    e = state.storage_energy + panel_p * sim.timestep # Watts/Day ?
     consumption = state.power_consumption * sim.timestep
     e = e - consumption
 
     SimulationState(date,sun,sun_p,panel_p, consumption, e)
 end
 
-function (sim::Simulation)()
+"""
+    (sim::Simulation)(data_collection_freq = 10)::Array{T,2}
+
+  run the simulation.
+
+  collect plotting date every `data_collection_freq` steps
+"""
+function (sim::Simulation)(data_collection_freq = 10)::Array{Float64,2}
+  data = Array{Float64}(undef, 4, 0)
   state = SimulationState(sim.startdate)
+  i = 1
   while(state.t.MJD < sim.enddate.MJD)
     state = sim(state)
+    if i % data_collection_freq == 0
+      data = hcat(data, [
+      state.sun_sph.azimuth.deg, 
+      state.sun_sph.elevation.deg, 
+      state.panel_power, 
+      state.storage_energy]
+      )
+    end
+    i = i + 1
   end
+  data
 end
 
-simulation = Simulation(panel,Date(2023,6,21,0.0),Date(2023,6,22,0.0), 0.0001)
-simulation()
-pl = plot(range, plotting_data,lab=["SunAz" "SunH" "Power" "Energy" "ΔAz" "ΔH"], legend = :outerright)
+function visualize(data::Array{Float64, 2})
+  plot(
+    1:size(data,2), 
+    data', 
+    lab = ["SunAz" "SunH" "Power" "Energy"], 
+    legend = :outerright
+    )
+end
+
+panel = SolarPanel(
+  GeoLocation(11.6 |> deg, 48.1 |> deg), # Munich
+  SphericalCoordinates(57.34 |> deg , 90 |> deg), 
+  PanelSize(1,1)
+)
+
+simulation = Simulation(
+  panel,
+  Date(2023,6,20),
+  Date(2023,6,23), 
+  0.01
+)
+
+data = simulation(10)
+@printf "simulation finished\n"
+
+pl = visualize(data)
 Plots.pdf(pl, "testr.pdf")
+@printf "Plot printed\n"
 
 
 
